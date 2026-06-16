@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # GSTR 2B Reconciliation — Desktop App
 
 A standalone Windows desktop application for GSTR 2B reconciliation. All
@@ -77,3 +78,6 @@ GSTR2B Outputs\
 - The app needs the Microsoft **WebView2 runtime**, which is already present on
   Windows 10/11. If a machine lacks it, install the Evergreen runtime from
   Microsoft (free): search "WebView2 Runtime download".
+=======
+# Monthly-Invoice-Management-System
+>>>>>>> 7d4f5e4369204c6dcaa7d26ba0718c43ded770ce
