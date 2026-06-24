@@ -61,7 +61,7 @@ REM --paths python      lets "import engine" resolve.
 REM --add-data ui.html  bundles the HTML (it sits next to build.bat, in the root).
 REM --collect-all ...    pulls in native bits for these libraries.
 REM --distpath .         outputs the .exe directly here, no dist\ folder created.
-pyinstaller ^
+python -m PyInstaller ^
   --noconfirm ^
   --onefile ^
   --windowed ^
