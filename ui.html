@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>GSTR 2B Reconciliation</title>
+<style>
+  :root {
+    --navy: #203764;
+    --text-primary: #1a1f29;
+    --text-secondary: #6b7280;
+    --bg-primary: #ffffff;
+    --bg-secondary: #f4f5f7;
+    --border-tertiary: #e3e5e9;
+    --border-secondary: #c8ccd2;
+    --bg-success: #e7f5ec;  --text-success: #1a7f43;
+    --bg-danger: #fdecec;   --text-danger: #c0392b;
+    --amber-bg: #faeeda;    --amber-text: #854f0b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color: var(--text-primary); background: var(--bg-primary); font-size: 14px;
+  }
+  .app { display: flex; min-height: 100vh; }
+
+  /* Sidebar */
+  .sidebar {
+    width: 200px; flex-shrink: 0; background: var(--navy); color: #fff;
+    display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh;
+  }
+  .sidebar .title { padding: 18px 16px; font-size: 16px; font-weight: 500; }
+  .nav { flex: 1; display: flex; flex-direction: column; gap: 2px; padding: 0 8px; }
+  .nav button {
+    display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 6px;
+    border: none; cursor: pointer; background: transparent; color: #fff; font-size: 13px;
+    width: 100%; text-align: left; font-weight: 400;
+  }
+  .nav button.active { background: rgba(255,255,255,0.14); font-weight: 500; }
+  .sidebar .foot { padding: 12px; border-top: 0.5px solid rgba(255,255,255,0.2); }
+  .sidebar .foot label { font-size: 11px; color: rgba(255,255,255,0.7); }
+  .sidebar .foot input {
+    width: 100%; margin-top: 4px; background: rgba(255,255,255,0.1);
+    border: 0.5px solid rgba(255,255,255,0.25); color: #fff; border-radius: 5px;
+    padding: 5px 8px; font-size: 12px;
+  }
+
+  /* Main */
+  .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 24px; border-bottom: 0.5px solid var(--border-tertiary);
+  }
+  .topbar .panel-name { font-size: 15px; font-weight: 500; }
+  .topbar .month { font-size: 13px; color: var(--text-secondary); }
+  .content { flex: 1; padding: 24px; overflow-y: auto; }
+
+  /* Buttons */
+  .btn-primary {
+    background: var(--navy); color: #fff; border: none; border-radius: 6px;
+    padding: 8px 16px; font-size: 13px; font-weight: 500; cursor: pointer;
+  }
+  .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-secondary {
+    background: transparent; color: var(--text-primary);
+    border: 0.5px solid var(--border-secondary); border-radius: 6px;
+    padding: 7px 14px; font-size: 13px; cursor: pointer;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+
+  /* Drop zones */
+  .dz-label { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+  .dz-label .opt { color: var(--text-secondary); font-weight: 400; }
+  .dz {
+    border: 1.5px dashed var(--border-secondary); border-radius: 8px;
+    padding: 28px 16px; text-align: center; cursor: pointer;
+    transition: background 0.12s;
+  }
+  .dz:hover { background: var(--bg-secondary); }
+  .dz.filled {
+    border: 1.5px solid var(--text-success); background: var(--bg-success);
+    padding: 14px 16px; cursor: default; text-align: left;
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  }
+  .dz .hint { color: var(--text-secondary); font-size: 12px; margin-top: 8px; }
+  .dz .fileinfo { display: flex; align-items: center; gap: 10px; min-width: 0; }
+  .dz .checkmark {
+    width: 22px; height: 22px; border-radius: 11px; background: var(--text-success);
+    color: #fff; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  }
+  .dz .fname { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dz .fmeta { font-size: 11px; color: var(--text-secondary); }
+  .dz .remove { background: none; border: none; color: var(--text-danger); font-size: 12px; cursor: pointer; text-decoration: underline; flex-shrink: 0; }
+
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+
+  /* Step cards */
+  .step { border: 0.5px solid var(--border-tertiary); border-radius: 10px; margin-bottom: 16px; overflow: hidden; }
+  .step-head { display: flex; align-items: center; gap: 12px; padding: 14px 18px; border-bottom: 0.5px solid var(--border-tertiary); }
+  .step-num {
+    width: 28px; height: 28px; border-radius: 14px; flex-shrink: 0; background: var(--navy);
+    color: #fff; display: inline-flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 500;
+  }
+  .step-num.done { background: var(--text-success); }
+  .step-title { flex: 1; font-size: 14px; font-weight: 500; }
+  .step-body { padding: 18px; }
+
+  .pill { font-size: 10px; padding: 4px 10px; border-radius: 10px; font-weight: 500; white-space: nowrap; border: 0.5px solid; }
+  .pill.idle    { background: var(--bg-secondary); color: var(--text-secondary); border-color: var(--border-secondary); }
+  .pill.running { background: var(--amber-bg); color: var(--amber-text); border-color: var(--amber-text); }
+  .pill.done    { background: var(--bg-success); color: var(--text-success); border-color: var(--text-success); }
+  .pill.error   { background: var(--bg-danger); color: var(--text-danger); border-color: var(--text-danger); }
+
+  pre.log {
+    font-size: 12px; white-space: pre-wrap; background: var(--bg-secondary);
+    padding: 12px; border-radius: 6px; margin: 12px 0 0; font-family: inherit;
+  }
+  .err { font-size: 12px; color: var(--text-danger); margin-top: 12px; }
+  .muted { font-size: 12px; color: var(--text-secondary); }
+
+  /* Tables */
+  .tbl-wrap { overflow-x: auto; overflow-y: auto; max-height: 220px; border: 0.5px solid var(--border-tertiary); border-radius: 4px; margin-top: 6px; }
+  table { table-layout: fixed; width: 100%; border-collapse: collapse; font-size: 11px; }
+  th {
+    position: sticky; top: 0; background: var(--navy); color: #fff; font-weight: 500;
+    text-align: left; padding: 6px 8px; white-space: nowrap; min-width: 90px;
+    border: 0.5px solid var(--border-tertiary);
+  }
+  td {
+    padding: 5px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border: 0.5px solid var(--border-tertiary); color: var(--text-primary);
+  }
+  tr:nth-child(even) td { background: var(--bg-secondary); }
+  td.mono, th.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+  /* Metric cards */
+  .metrics { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+  .metric { border: 0.5px solid var(--border-tertiary); border-radius: 8px; padding: 14px; }
+  .metric .num { font-size: 22px; font-weight: 500; color: var(--navy); }
+  .metric .lab { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+  .field-label { font-size: 13px; font-weight: 500; display: block; margin-bottom: 6px; }
+  .text-input {
+    border: 0.5px solid var(--border-secondary); border-radius: 6px; padding: 8px 10px;
+    font-size: 13px; background: var(--bg-primary); color: var(--text-primary);
+  }
+  .row-end { margin-top: 24px; display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+  .save-bar {
+    margin-top: 18px; padding: 16px; border: 0.5px solid var(--border-tertiary);
+    border-radius: 8px; background: var(--bg-secondary);
+  }
+  .save-bar .dir { font-size: 12px; color: var(--text-secondary); margin: 8px 0; word-break: break-all; }
+  .icon { width: 16px; height: 16px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="title">GSTR 2B Recon</div>
+    <nav class="nav" id="nav"></nav>
+    <div class="foot">
+      <label for="monthFoot">Month</label>
+      <input id="monthFoot" value="2026-Jan" />
+    </div>
+  </aside>
+  <main class="main">
+    <div class="topbar">
+      <div class="panel-name" id="panelName">Upload files</div>
+      <div class="month" id="monthTop">Month: 2026-Jan</div>
+    </div>
+    <div class="content" id="content"></div>
+  </main>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════════════
+// State
+// ════════════════════════════════════════════════════════════════════════════
+const state = {
+  panel: 'upload',                 // 'upload' | 'results'
+  month: '2026-Jan',
+  files: { raw2b: null, rawtally: null, cf2b: null, cftally: null, excl: null },
+  run: { status: 'idle', steps: [], err: '', stats: null, tabs: null },  // status: idle|running|done|error
+  activeTab: 'summary_reconciled',
+  outputDir: '',
+  saveMsg: '',
+};
+const MONO = new Set(['GSTIN of supplier', 'Invoice number', 'Matched Tally Invoice No.']);
+
+// ════════════════════════════════════════════════════════════════════════════
+// API readiness — pywebview injects window.pywebview.api asynchronously
+// ════════════════════════════════════════════════════════════════════════════
+function apiReady() {
+  return new Promise((resolve) => {
+    if (window.pywebview && window.pywebview.api) return resolve();
+    window.addEventListener('pywebviewready', () => resolve(), { once: true });
+  });
+}
+async function api() { await apiReady(); return window.pywebview.api; }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ════════════════════════════════════════════════════════════════════════════
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result.split(',')[1]);
+    r.onerror = () => reject(new Error('Could not read file'));
+    r.readAsDataURL(file);
+  });
+}
+function fmtBytes(n) {
+  if (n == null) return '';
+  if (n < 1024) return n + ' B';
+  if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1048576).toFixed(1) + ' MB';
+}
+function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+const ICONS = {
+  check: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-9"/></svg>',
+  download: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/><path d="M7 11l5 5 5-5"/><path d="M12 4v12"/></svg>',
+  folder: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',
+  cloud: '<svg class="icon" style="width:28px;height:28px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M7 18a4 4 0 1 1 .5-7.97A6 6 0 0 1 19 9a4 4 0 0 1 0 9"/><path d="M9 14l3-3 3 3"/><path d="M12 11v7"/></svg>',
+  table: '<svg class="icon" style="width:40px;height:40px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 10h16M4 15h16M10 4v16"/></svg>',
+};
+const NAV = [
+  { key: 'upload', label: 'Upload & run' },
+  { key: 'results', label: 'Results' },
+];
+const PANEL_TITLES = { upload: 'Upload & run', results: 'Results' };
+
+// ════════════════════════════════════════════════════════════════════════════
+// Rendering — shared table
+// ════════════════════════════════════════════════════════════════════════════
+function renderTable(rows, cols, maxHeight) {
+  if (!rows || rows.length === 0) return '<div class="muted" style="padding:8px 0">No rows.</div>';
+  const useCols = cols && cols.length ? cols : Object.keys(rows[0]);
+  const mh = maxHeight || 220;
+  let html = `<div class="tbl-wrap" style="max-height:${mh}px"><table><thead><tr>`;
+  for (const c of useCols) html += `<th class="${MONO.has(c) ? 'mono' : ''}">${esc(c)}</th>`;
+  html += '</tr></thead><tbody>';
+  for (const row of rows) {
+    html += '<tr>';
+    for (const c of useCols) html += `<td class="${MONO.has(c) ? 'mono' : ''}">${esc(row[c])}</td>`;
+    html += '</tr>';
+  }
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function renderNav() {
+  const nav = document.getElementById('nav');
+  nav.innerHTML = '';
+  for (const item of NAV) {
+    const disabled = item.key === 'results' && state.run.status !== 'done';
+    const b = el(`<button class="${state.panel === item.key ? 'active' : ''}" ${disabled ? 'style="opacity:.45;cursor:not-allowed"' : ''}>${item.label}</button>`);
+    b.onclick = () => { if (disabled) return; state.panel = item.key; render(); };
+    nav.appendChild(b);
+  }
+}
+
+// ── Drop zone ────────────────────────────────────────────────────────────────
+function dropZone(label, fileKey, opt, onFile) {
+  const info = state.files[fileKey];
+  const wrap = el('<div></div>');
+  const lbl = el(`<div class="dz-label">${esc(label)}${opt ? ' <span class="opt">(optional)</span>' : ''}</div>`);
+  wrap.appendChild(lbl);
+
+  if (info) {
+    const z = el(`<div class="dz filled">
+      <div class="fileinfo">
+        <span class="checkmark">${ICONS.check}</span>
+        <div style="min-width:0">
+          <div class="fname">${esc(info.name)}</div>
+          <div class="fmeta">${fmtBytes(info.size)}${info.rows != null ? ' · ' + info.rows + ' rows' : ''}${info.count != null ? ' · ' + info.count + ' GSTINs' : ''}</div>
+        </div>
+      </div>
+      <button class="remove">Remove</button>
+    </div>`);
+    z.querySelector('.remove').onclick = async (e) => {
+      e.stopPropagation();
+      state.files[fileKey] = null;
+      const a = await api(); await a.clear_file(fileKey);
+      render();
+    };
+    wrap.appendChild(z);
+  } else {
+    const z = el(`<div class="dz">${ICONS.cloud}<div class="hint">Drop .xlsx here or click to browse</div></div>`);
+    const input = el('<input type="file" accept=".xlsx" style="display:none" />');
+    z.appendChild(input);
+    z.onclick = () => input.click();
+    input.onchange = (e) => { if (e.target.files[0]) onFile(e.target.files[0]); };
+    z.ondragover = (e) => { e.preventDefault(); z.style.background = 'var(--bg-secondary)'; };
+    z.ondragleave = () => { z.style.background = ''; };
+    z.ondrop = (e) => { e.preventDefault(); z.style.background = ''; if (e.dataTransfer.files[0]) onFile(e.dataTransfer.files[0]); };
+    wrap.appendChild(z);
+  }
+  return wrap;
+}
+
+// ── Panel 1: Upload & run ────────────────────────────────────────────────────
+function renderUpload(c) {
+  const wrap = el('<div style="max-width:900px"></div>');
+
+  // Required raw files
+  wrap.appendChild(el('<div style="font-size:13px;font-weight:500;margin-bottom:10px">Required files</div>'));
+  const grid = el('<div class="grid2"></div>');
+  grid.appendChild(dropZone('2B raw file', 'raw2b', false, async (file) => {
+    const b64 = await fileToBase64(file);
+    const a = await api();
+    const res = await a.load_raw_2b(b64);
+    if (res.ok) state.files.raw2b = { name: file.name, size: file.size, rows: res.rows };
+    else alert('2B file error: ' + res.error);
+    render();
+  }));
+  grid.appendChild(dropZone('Tally raw file', 'rawtally', false, async (file) => {
+    const b64 = await fileToBase64(file);
+    const a = await api();
+    const res = await a.load_raw_tally(b64);
+    if (res.ok) state.files.rawtally = { name: file.name, size: file.size, rows: res.rows };
+    else alert('Tally file error: ' + res.error);
+    render();
+  }));
+  wrap.appendChild(grid);
+
+  // Optional files
+  wrap.appendChild(el('<div style="font-size:13px;font-weight:500;margin:22px 0 10px">Optional files</div>'));
+  const grid2 = el('<div class="grid2"></div>');
+  grid2.appendChild(dropZone('2B carry forward', 'cf2b', true, async (file) => {
+    const b64 = await fileToBase64(file); const a = await api();
+    const res = await a.load_cf_2b(b64);
+    if (res.ok) state.files.cf2b = { name: file.name, size: file.size };
+    else alert('CF 2B error: ' + res.error);
+    render();
+  }));
+  grid2.appendChild(dropZone('Tally carry forward', 'cftally', true, async (file) => {
+    const b64 = await fileToBase64(file); const a = await api();
+    const res = await a.load_cf_tally(b64);
+    if (res.ok) state.files.cftally = { name: file.name, size: file.size };
+    else alert('CF Tally error: ' + res.error);
+    render();
+  }));
+  wrap.appendChild(grid2);
+
+  const exWrap = el('<div style="max-width:430px;margin-top:16px"></div>');
+  exWrap.appendChild(dropZone('GST exclusion list', 'excl', true, async (file) => {
+    const b64 = await fileToBase64(file); const a = await api();
+    const res = await a.load_exclusion(b64);
+    if (res.ok) state.files.excl = { name: file.name, size: file.size, count: res.count };
+    else alert('Exclusion list error: ' + res.error);
+    render();
+  }));
+  wrap.appendChild(exWrap);
+
+  // Month + run
+  const ready = state.files.raw2b && state.files.rawtally;
+  const rowEnd = el('<div class="row-end"></div>');
+  const monthBox = el('<div><label class="field-label">Month (YYYY-Mon)</label></div>');
+  const monthInput = el(`<input class="text-input" style="width:160px" value="${esc(state.month)}" />`);
+  monthInput.oninput = (e) => setMonth(e.target.value);
+  monthBox.appendChild(monthInput);
+  rowEnd.appendChild(monthBox);
+
+  const runBtn = el(`<button class="btn-primary" ${ready && state.run.status !== 'running' ? '' : 'disabled'}>${state.run.status === 'running' ? 'Processing…' : 'Run reconciliation'}</button>`);
+  runBtn.onclick = runEverything;
+  rowEnd.appendChild(runBtn);
+  wrap.appendChild(rowEnd);
+
+  if (!ready) wrap.appendChild(el('<p class="muted" style="margin-top:12px">Upload both raw files to enable the run.</p>'));
+
+  // Live step log
+  if (state.run.status === 'running' || state.run.steps.length) {
+    const log = el('<div style="margin-top:20px"></div>');
+    log.appendChild(el('<div style="font-size:13px;font-weight:500;margin-bottom:8px">Progress</div>'));
+    const steps = state.run.steps.slice();
+    if (state.run.status === 'running') steps.push('Working…');
+    const list = el('<div></div>');
+    steps.forEach((s) => list.appendChild(el(`<div style="font-size:13px;padding:6px 0;display:flex;gap:8px"><span style="color:var(--text-success)">${ICONS.check}</span><span>${esc(s)}</span></div>`)));
+    log.appendChild(list);
+    wrap.appendChild(log);
+  }
+  if (state.run.err) wrap.appendChild(el(`<div class="err">Run failed: ${esc(state.run.err)}</div>`));
+
+  c.appendChild(wrap);
+}
+
+async function runEverything() {
+  state.run = { status: 'running', steps: [], err: '', stats: null, tabs: null };
+  render();
+  const a = await api();
+  const r = await a.run_all();
+  if (r.ok) {
+    state.run = { status: 'done', steps: r.steps, err: '', stats: r.stats, tabs: r.tabs };
+    state.panel = 'results';
+  } else {
+    state.run = { status: 'error', steps: [], err: r.error, stats: null, tabs: null };
+  }
+  render();
+}
+
+// ── Panel 2: Results ─────────────────────────────────────────────────────────
+function renderResults(c) {
+  if (state.run.status !== 'done' || !state.run.tabs) {
+    c.appendChild(el(`<div style="text-align:center;padding:60px 20px;color:var(--text-secondary)">
+      ${ICONS.table}
+      <div style="font-size:15px;font-weight:500;margin-top:12px;color:var(--text-primary)">No results yet.</div>
+      <div style="font-size:13px;margin-top:4px">Upload your files and click “Run reconciliation”.</div>
+    </div>`));
+    return;
+  }
+  const wrap = el('<div style="max-width:1040px"></div>');
+  const st = state.run.stats;
+
+  // Metrics
+  const metrics = el('<div class="metrics"></div>');
+  [['Reconciled', st.reconciled], ['Not to be claimed', st.ntbc], ['2B carry forward', st.cf2b], ['Tally carry forward', st.cfTally]]
+    .forEach(([lab, val]) => metrics.appendChild(el(`<div class="metric"><div class="num">${val}</div><div class="lab">${lab}</div></div>`)));
+  wrap.appendChild(metrics);
+  wrap.appendChild(el(`<div class="muted" style="margin-top:12px">Near-misses flagged: ${st.nearMiss2B} (2B) / ${st.nearMissTally} (Tally) · processed ${st.total2B} 2B rows and ${st.totalTally} Tally rows.</div>`));
+
+  // File tabs — the 3 deliverables (Summary shows its two sheets as sub-tabs)
+  const tabs = state.run.tabs;
+  const tabDefs = [
+    { key: 'summary_reconciled', group: 'GSTR 2B Summary', sheet: 'Reconciled entries' },
+    { key: 'summary_ntbc',       group: 'GSTR 2B Summary', sheet: 'Not to be claimed' },
+    { key: 'cf_2b',              group: '2B Carry Forward', sheet: null },
+    { key: 'cf_tally',           group: 'Tally Carry Forward', sheet: null },
+  ];
+
+  const strip = el('<div style="display:flex;gap:4px;border-bottom:0.5px solid var(--border-tertiary);margin-top:20px;flex-wrap:wrap"></div>');
+  const body = el('<div style="margin-top:12px"></div>');
+
+  const showTab = (key) => {
+    state.activeTab = key;
+    const t = tabs[key];
+    body.innerHTML = '';
+    body.appendChild(el(`<div class="muted" style="margin-bottom:6px">${esc(t.title)} — ${t.total} rows${t.total > t.rows.length ? ' (showing first ' + t.rows.length + ')' : ''}</div>`));
+    body.appendChild(el(renderTable(t.rows, t.cols, 380)));
+    Array.from(strip.children).forEach((ch) => {
+      const on = ch.dataset.key === key;
+      ch.style.borderBottom = on ? '2px solid var(--navy)' : '2px solid transparent';
+      ch.style.color = on ? 'var(--navy)' : 'var(--text-secondary)';
+      ch.style.fontWeight = on ? '500' : '400';
+    });
+  };
+
+  tabDefs.forEach((d) => {
+    const label = d.sheet ? `${d.group}: ${d.sheet}` : d.group;
+    const tb = el(`<button data-key="${d.key}" style="background:none;border:none;padding:8px 12px;font-size:13px;cursor:pointer;border-bottom:2px solid transparent;color:var(--text-secondary)">${esc(label)} (${tabs[d.key].total})</button>`);
+    tb.onclick = () => showTab(d.key);
+    strip.appendChild(tb);
+  });
+  wrap.appendChild(strip);
+  wrap.appendChild(body);
+
+  // Save bar
+  const saveBar = el('<div class="save-bar"></div>');
+  saveBar.appendChild(el('<div style="font-size:13px;font-weight:500">Save output files</div>'));
+  saveBar.appendChild(el(`<div class="dir">Saving to: ${esc(state.outputDir || '(loading…)')}\\<b>${esc(state.month)}</b>\\ — Summary and Carry Forward sub-folders are created automatically.</div>`));
+  const saveBtns = el('<div style="display:flex;gap:10px;flex-wrap:wrap"></div>');
+  const chooseBtn = el(`<button class="btn-secondary">${ICONS.folder} Change location…</button>`);
+  chooseBtn.onclick = async () => { const a = await api(); const dir = await a.choose_output_dir(); state.outputDir = dir; render(); };
+  const saveBtn = el(`<button class="btn-primary">${ICONS.download} Save output files</button>`);
+  saveBtn.onclick = async () => {
+    saveBtn.disabled = true;
+    const a = await api(); const r = await a.save_outputs(state.month);
+    state.saveMsg = r.ok ? `Saved ${r.files.length} files to ${r.dir}` : ('Save failed: ' + r.error);
+    render();
+  };
+  const openBtn = el(`<button class="btn-secondary">${ICONS.folder} Open folder</button>`);
+  openBtn.onclick = async () => { const a = await api(); await a.open_output_dir(state.month); };
+  saveBtns.appendChild(chooseBtn); saveBtns.appendChild(saveBtn); saveBtns.appendChild(openBtn);
+  saveBar.appendChild(saveBtns);
+  if (state.saveMsg) saveBar.appendChild(el(`<div class="muted" style="margin-top:10px">${esc(state.saveMsg)}</div>`));
+  wrap.appendChild(saveBar);
+
+  c.appendChild(wrap);
+  showTab(state.activeTab in tabs ? state.activeTab : 'summary_reconciled');
+}
+
+// ── Master render ────────────────────────────────────────────────────────────
+function setMonth(m) {
+  state.month = m;
+  document.getElementById('monthFoot').value = m;
+  document.getElementById('monthTop').textContent = 'Month: ' + m;
+}
+function render() {
+  renderNav();
+  document.getElementById('panelName').textContent = PANEL_TITLES[state.panel];
+  document.getElementById('monthTop').textContent = 'Month: ' + state.month;
+  const c = document.getElementById('content');
+  c.innerHTML = '';
+  if (state.panel === 'upload') renderUpload(c);
+  else renderResults(c);
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+document.getElementById('monthFoot').addEventListener('input', (e) => setMonth(e.target.value));
+(async () => {
+  render();
+  const a = await api();
+  try { state.outputDir = await a.get_output_dir(); } catch (e) { /* ignore */ }
+  render();
+})();
+</script>
+</body>
+</html>
