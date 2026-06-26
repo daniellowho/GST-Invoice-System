@@ -11,6 +11,7 @@ bytes. Outputs are written to a caller-supplied folder.
 
 import io
 import re
+from collections import Counter
 from datetime import date, timedelta
 
 import pandas as pd
@@ -145,6 +146,63 @@ def _parse_2b_date(val):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Period detection — auto month/year from the raw files (no manual entry needed)
+# ══════════════════════════════════════════════════════════════════════════════
+_MONTH_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+               "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _period_to_label(raw):
+    """Best-effort parse of a raw period value into a 'YYYY-Mon' label."""
+    s = str(raw).strip()
+    if not s or s.lower() == "nan":
+        return None
+    if re.fullmatch(r"\d{6}", s):
+        mm, yyyy = int(s[:2]), int(s[2:])
+        if 1 <= mm <= 12:
+            return f"{yyyy}-{_MONTH_ABBR[mm - 1]}"
+    m = re.match(r"([A-Za-z]{3,9})[\s\-]?(\d{4})", s)
+    if m:
+        mon = m.group(1)[:3].title()
+        if mon in _MONTH_ABBR:
+            return f"{m.group(2)}-{mon}"
+    m = re.match(r"(\d{1,2})[\s\-/](\d{4})", s)
+    if m:
+        mm, yyyy = int(m.group(1)), m.group(2)
+        if 1 <= mm <= 12:
+            return f"{yyyy}-{_MONTH_ABBR[mm - 1]}"
+    return None
+
+
+def detect_2b_period(df):
+    """Most common GSTR period in a cleaned 2B frame, as 'YYYY-Mon' (or None)."""
+    col = "GSTR-1/IFF/GSTR-5 Period"
+    if col not in df.columns:
+        return None
+    vals = df[col].dropna().astype(str).str.strip()
+    vals = vals[vals != ""]
+    if vals.empty:
+        return None
+    for raw in vals.mode().tolist():
+        label = _period_to_label(raw)
+        if label:
+            return label
+    return None
+
+
+def detect_tally_period(df):
+    """Most common invoice month/year in a cleaned Tally frame, as 'YYYY-Mon' (or None)."""
+    col = "Invoice Date" if "Invoice Date" in df.columns else None
+    if not col:
+        return None
+    keys = [(d.year, d.month) for d in df[col] if isinstance(d, date)]
+    if not keys:
+        return None
+    (yyyy, mm), _ = Counter(keys).most_common(1)[0]
+    return f"{yyyy}-{_MONTH_ABBR[mm - 1]}"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Output formatting
 # ══════════════════════════════════════════════════════════════════════════════
 def _write_header(ws, headers, row=1):
@@ -275,6 +333,41 @@ def _wb_bytes(build_fn):
     bio = io.BytesIO()
     wb.save(bio)
     return bio.getvalue()
+
+
+def _build_tally_template(ws):
+    """Create a blank Tally template with one example row for field formatting."""
+    _write_header(ws, _TALLY_OUT, row=1)
+    for letter, w in _TALLY_COL_WIDTHS.items():
+        ws.column_dimensions[letter].width = w
+    examples = {
+        "Tally Entry Date": date(2026, 1, 31),
+        "GSTIN of supplier": "22AAAAA0000A1Z5",
+        "Trade/Legal name": "ABC TRADERS PVT LTD",
+        "Invoice number": "INV-001",
+        "Invoice Date": date(2026, 1, 30),
+        "Invoice Value(₹)": 10000.0,
+        "Central Tax(₹)": 900.0,
+        "State/UT Tax(₹)": 900.0,
+        "Integrated Tax(₹)": 0.0,
+        "Division": "HEAD OFFICE",
+    }
+    for ci, name in enumerate(_TALLY_OUT, 1):
+        cell = ws.cell(2, ci)
+        cell.value = examples.get(name)
+        if name in ("Tally Entry Date", "Invoice Date"):
+            cell.number_format = DATE_FMT_TALLY
+        elif name in ("Invoice Value(₹)", "Central Tax(₹)", "State/UT Tax(₹)", "Integrated Tax(₹)"):
+            cell.number_format = ACCOUNTING_FMT
+        else:
+            cell.number_format = "@"
+        cell.font = Font(name=DATA_FONT_NAME_TALLY, size=DATA_FONT_SIZE_TALLY, bold=False)
+        cell.alignment = Alignment(horizontal="right" if name in ("Tally Entry Date", "Invoice Date") else None, vertical="top")
+
+
+def build_tally_template_bytes():
+    """Return a ready-to-use Tally template workbook."""
+    return _wb_bytes(_build_tally_template)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -509,6 +602,7 @@ def _add_tax_sort_cols(df):
     )
     df[IGST_COL] = pd.to_numeric(df.get("Integrated Tax(\u20b9)", 0), errors="coerce").fillna(0)
     return df
+
 
 
 def _dates_match(a, b):

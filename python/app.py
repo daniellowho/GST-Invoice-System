@@ -22,6 +22,27 @@ import engine
 
 APP_NAME = "GSTR 2B Reconciliation"
 
+# Small persistent state file — independent of the chosen output folder, so it
+# survives even if the user later changes "Change location...". Used purely
+# for reminders (last carry-forward upload, last month's pending payments).
+_STATE_DIR = Path.home() / ".gstr2b_recon"
+_STATE_FILE = _STATE_DIR / "state.json"
+
+
+def _load_app_state():
+    try:
+        return json.loads(_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_app_state(state):
+    try:
+        _STATE_DIR.mkdir(parents=True, exist_ok=True)
+        _STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    except Exception:
+        pass  # reminders are best-effort; never let this break the app
+
 
 def _resource_path(rel):
     """
@@ -60,6 +81,7 @@ class Api:
         # In-memory working state for the current month
         self._reset_state()
         self._output_dir = _default_output_dir()
+        self._app_state = _load_app_state()
 
     def _reset_state(self):
         self.df_2b_latest = None
@@ -94,35 +116,58 @@ class Api:
         return self._output_dir
 
     # ── File intake (called when user drops/picks a file) ─────────────────────
-    def load_raw_2b(self, b64):
+    def load_raw_2b(self, b64, filename=None):
         try:
             data = self._decode(b64)
             self.raw["raw2b"] = data
             count = engine.pd.read_excel(engine.io.BytesIO(data), header=None).shape[0]
-            return {"ok": True, "rows": int(count)}
+            period = None
+            try:
+                df_tmp, _ = engine.clean_2b(data)
+                period = engine.detect_2b_period(df_tmp)
+            except Exception:
+                period = None  # detection is best-effort; cleaning errors surface in Stage 1
+            return {"ok": True, "rows": int(count), "period": period}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def load_raw_tally(self, b64):
+    def load_raw_tally(self, b64, filename=None):
         try:
             data = self._decode(b64)
             self.raw["rawtally"] = data
             count = engine.pd.read_excel(engine.io.BytesIO(data), header=None).shape[0]
-            return {"ok": True, "rows": int(count)}
+            period = None
+            try:
+                df_tmp, _, _ = engine.clean_tally(data)
+                period = engine.detect_tally_period(df_tmp)
+            except Exception:
+                period = None
+            return {"ok": True, "rows": int(count), "period": period}
         except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return {"ok": False, "error": str(e), "hint": "Please use the Tally template shown in the app: row 1 should be the headers, row 2 should be example values, and the fields should stay in the same order."}
 
-    def load_cf_2b(self, b64):
+    def load_cf_2b(self, b64, filename=None):
         try:
             self.raw["cf2b"] = self._decode(b64)
+            self._app_state["last_cf_2b"] = {"when": datetime.utcnow().isoformat(), "filename": filename}
+            _save_app_state(self._app_state)
             return {"ok": True}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
-    def load_cf_tally(self, b64):
+    def load_cf_tally(self, b64, filename=None):
         try:
             self.raw["cftally"] = self._decode(b64)
+            self._app_state["last_cf_tally"] = {"when": datetime.utcnow().isoformat(), "filename": filename}
+            _save_app_state(self._app_state)
             return {"ok": True}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    def get_tally_template(self):
+        try:
+            data = engine.build_tally_template_bytes()
+            return {"ok": True, "filename": "Tally Template.xlsx", "b64": base64.b64encode(data).decode("ascii")}
         except Exception as e:
             return {"ok": False, "error": str(e)}
 
@@ -287,6 +332,34 @@ class Api:
             return {"ok": False}
         return {"ok": True, "stats": self.stage3["stats"], "tabs": self._full_tabs()}
 
+    # ── Reminders (Stage 2 popup + pending-payments banner) ────────────────────
+    def get_reminders(self):
+        def info(key):
+            d = self._app_state.get(key)
+            if not d:
+                return None
+            days_ago = None
+            try:
+                days_ago = (datetime.utcnow() - datetime.fromisoformat(d["when"])).days
+            except Exception:
+                pass
+            return {"when": d.get("when"), "filename": d.get("filename"), "days_ago": days_ago}
+
+        pending = self._app_state.get("last_run")
+        pending_out = None
+        if pending and pending.get("cf2b_count", 0) > 0:
+            days_ago = None
+            try:
+                days_ago = (datetime.utcnow() - datetime.fromisoformat(pending["when"])).days
+            except Exception:
+                pass
+            pending_out = {**pending, "days_ago": days_ago}
+
+        return {
+            "cf_last": {"raw2b": info("last_cf_2b"), "rawtally": info("last_cf_tally")},
+            "pending": pending_out,
+        }
+
     # ── Save outputs to disk ───────────────────────────────────────────────────
     def save_outputs(self, month):
         """
@@ -324,6 +397,21 @@ class Api:
                   engine.build_2b_cf_bytes(s["cf2b"]))
             write(cf_dir, f"Tally Carry Forward {month}.xlsx",
                   engine.build_tally_cf_bytes(s["cft"]))
+
+            try:
+                cf2b_amount = float(engine.pd.to_numeric(
+                    s["cf2b"]["Invoice Value(\u20b9)"], errors="coerce").fillna(0).sum()) if len(s["cf2b"]) else 0.0
+            except Exception:
+                cf2b_amount = 0.0
+            self._app_state["last_run"] = {
+                "month": month,
+                "when": datetime.utcnow().isoformat(),
+                "cf2b_count": len(s["cf2b"]),
+                "cf_tally_count": len(s["cft"]),
+                "ntbc_count": len(s["ntbc"]),
+                "cf2b_amount": cf2b_amount,
+            }
+            _save_app_state(self._app_state)
 
             return {"ok": True, "dir": str(month_dir), "files": written}
         except Exception as e:

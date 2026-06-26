@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -180,11 +180,18 @@
 const state = {
   panel: 'upload',                 // 'upload' | 'results'
   month: '2026-Jan',
+  monthEdited: false,              // true once user manually types a month
+  monthAuto: false,                // true if current month value came from auto-detect
+  monthMismatch: null,             // {twoB, tally} when files disagree on period
+  detected: { raw2b: null, rawtally: null },
   files: { raw2b: null, rawtally: null, cf2b: null, cftally: null, excl: null },
   run: { status: 'idle', steps: [], err: '', stats: null, tabs: null },  // status: idle|running|done|error
   activeTab: 'summary_reconciled',
   outputDir: '',
   saveMsg: '',
+  reminders: null,                 // populated from get_reminders() at startup
+  cfReminderShown: false,          // Stage 2 popup shown once per session
+  pendingBannerDismissed: false,
 };
 const MONO = new Set(['GSTIN of supplier', 'Invoice number', 'Matched Tally Invoice No.']);
 
@@ -216,8 +223,68 @@ function fmtBytes(n) {
   if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
   return (n / 1048576).toFixed(1) + ' MB';
 }
+function downloadBase64File(b64, filename) {
+  const a = document.createElement('a');
+  a.href = 'data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,' + b64;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 function el(html) { const d = document.createElement('div'); d.innerHTML = html.trim(); return d.firstChild; }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+// ── Modal popup (used for the Stage 2 carry-forward reminder) ─────────────────
+function showModal(title, bodyHtml) {
+  closeModal();
+  const ov = el(`<div id="modalOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,0.35);display:flex;align-items:center;justify-content:center;z-index:1000">
+    <div style="background:#fff;border-radius:10px;max-width:440px;width:90%;padding:22px;box-shadow:0 12px 40px rgba(0,0,0,0.25)">
+      <div style="font-size:15px;font-weight:600;margin-bottom:12px">${esc(title)}</div>
+      <div id="modalBody"></div>
+      <div style="margin-top:18px;text-align:right">
+        <button class="btn-primary" id="modalOk">Got it</button>
+      </div>
+    </div>
+  </div>`);
+  document.body.appendChild(ov);
+  document.getElementById('modalBody').innerHTML = bodyHtml;
+  document.getElementById('modalOk').onclick = closeModal;
+  ov.onclick = (e) => { if (e.target === ov) closeModal(); };
+}
+function closeModal() {
+  const ov = document.getElementById('modalOverlay');
+  if (ov) ov.remove();
+}
+
+// ── Stage 2 popup: when was the carry-forward file last uploaded? ─────────────
+function maybeShowCfReminder() {
+  if (state.cfReminderShown) return;
+  if (!state.reminders) return;
+  state.cfReminderShown = true;
+  const r = state.reminders.cf_last || {};
+  const line = (label, info) => info
+    ? `${esc(label)}: <b>${esc(info.filename || 'a file')}</b> — ${info.days_ago != null ? info.days_ago + ' day(s) ago' : 'uploaded previously'}`
+    : `${esc(label)}: <span class="muted">never uploaded yet</span>`;
+  showModal('Carry-forward reminder', `
+    <div style="font-size:13px;line-height:1.7">
+      <p style="margin-top:0">Before dropping in this month's carry-forward files, here's when they were last added:</p>
+      <p style="margin:6px 0">${line('2B carry forward', r.raw2b)}</p>
+      <p style="margin-bottom:0">${line('Tally carry forward', r.rawtally)}</p>
+    </div>
+  `);
+}
+
+// ── Auto-detect month/year from the uploaded 2B / Tally files ─────────────────
+function autoApplyMonth() {
+  const d2b = state.detected.raw2b;
+  const dt = state.detected.rawtally;
+  state.monthMismatch = (d2b && dt && d2b !== dt) ? { twoB: d2b, tally: dt } : null;
+  const detected = d2b || dt;
+  if (!detected || state.monthEdited) return;
+  setMonth(detected);
+  state.monthAuto = true;
+}
+
 
 const ICONS = {
   check: '<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5 9-9"/></svg>',
@@ -305,23 +372,94 @@ function dropZone(label, fileKey, opt, onFile) {
 function renderUpload(c) {
   const wrap = el('<div style="max-width:900px"></div>');
 
+  const tallyGuide = el(`<div style="background:linear-gradient(135deg,#f7f8fb,#eef2f7);border:0.5px solid var(--border-tertiary);border-radius:10px;padding:14px 16px;margin-bottom:18px">
+    <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap">
+      <div style="min-width:280px;flex:1">
+        <div style="font-size:13px;font-weight:600;margin-bottom:6px">Tally upload pattern</div>
+        <div class="muted" style="line-height:1.55">
+          Use the template below when preparing the Tally sheet. The app expects these fields in this order, with row 2 reserved for example values.
+        </div>
+      </div>
+      <button class="btn-secondary" id="downloadTallyTemplate">Download Tally template</button>
+    </div>
+    <div style="margin-top:12px;overflow:auto">
+      <table style="width:100%;border-collapse:collapse;font-size:11px;background:#fff;border:0.5px solid var(--border-tertiary)">
+        <thead><tr>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Date</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">GSTIN/UIN</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Particulars</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Supplier Invoice No.</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Supplier Invoice Date</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Gross Total</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Input CGST</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Input SGST</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Input IGST</th>
+          <th style="padding:6px 8px;background:var(--navy);color:#fff;text-align:left">Division</th>
+        </tr></thead>
+        <tbody>
+          <tr>
+            <td style="padding:6px 8px">31-Jan-26</td>
+            <td style="padding:6px 8px;font-family:ui-monospace,monospace">22AAAAA0000A1Z5</td>
+            <td style="padding:6px 8px">ABC TRADERS PVT LTD</td>
+            <td style="padding:6px 8px">INV-001</td>
+            <td style="padding:6px 8px">30-Jan-26</td>
+            <td style="padding:6px 8px">10000.00</td>
+            <td style="padding:6px 8px">900.00</td>
+            <td style="padding:6px 8px">900.00</td>
+            <td style="padding:6px 8px">0.00</td>
+            <td style="padding:6px 8px">HEAD OFFICE</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>`);
+  tallyGuide.querySelector('#downloadTallyTemplate').onclick = async () => {
+    const a = await api();
+    const res = await a.get_tally_template();
+    if (res.ok) downloadBase64File(res.b64, res.filename);
+    else alert('Could not create template: ' + res.error);
+  };
+  wrap.appendChild(tallyGuide);
+
+  // Reminder: payments / bookings from last month that carried forward unresolved
+  if (state.reminders && state.reminders.pending && !state.pendingBannerDismissed) {
+    const p = state.reminders.pending;
+    const amt = Math.round(p.cf2b_amount || 0).toLocaleString('en-IN');
+    const banner = el(`<div style="background:var(--amber-bg);border:0.5px solid var(--amber-text);border-radius:8px;padding:12px 16px;margin-bottom:18px;display:flex;justify-content:space-between;gap:14px;align-items:flex-start">
+      <div style="font-size:13px;color:var(--amber-text);line-height:1.5">
+        <b>${p.cf2b_count} invoice(s) worth \u20b9${amt}</b> from <b>${esc(p.month)}</b>
+        ${p.days_ago != null ? `(${p.days_ago} day(s) ago)` : ''} carried forward unmatched —
+        likely still unpaid or unbooked in Tally. Worth clearing those before this month's run.
+      </div>
+      <button class="btn-secondary" id="dismissPendingBanner" style="flex-shrink:0">Dismiss</button>
+    </div>`);
+    banner.querySelector('#dismissPendingBanner').onclick = () => { state.pendingBannerDismissed = true; render(); };
+    wrap.appendChild(banner);
+  }
+
   // Required raw files
   wrap.appendChild(el('<div style="font-size:13px;font-weight:500;margin-bottom:10px">Required files</div>'));
   const grid = el('<div class="grid2"></div>');
   grid.appendChild(dropZone('2B raw file', 'raw2b', false, async (file) => {
     const b64 = await fileToBase64(file);
     const a = await api();
-    const res = await a.load_raw_2b(b64);
-    if (res.ok) state.files.raw2b = { name: file.name, size: file.size, rows: res.rows };
-    else alert('2B file error: ' + res.error);
+    const res = await a.load_raw_2b(b64, file.name);
+    if (res.ok) {
+      state.files.raw2b = { name: file.name, size: file.size, rows: res.rows };
+      state.detected.raw2b = res.period || null;
+      autoApplyMonth();
+    } else alert('2B file error: ' + res.error);
     render();
   }));
   grid.appendChild(dropZone('Tally raw file', 'rawtally', false, async (file) => {
     const b64 = await fileToBase64(file);
     const a = await api();
-    const res = await a.load_raw_tally(b64);
-    if (res.ok) state.files.rawtally = { name: file.name, size: file.size, rows: res.rows };
-    else alert('Tally file error: ' + res.error);
+    const res = await a.load_raw_tally(b64, file.name);
+    if (res.ok) {
+      state.files.rawtally = { name: file.name, size: file.size, rows: res.rows };
+      state.detected.rawtally = res.period || null;
+      autoApplyMonth();
+    } else alert('Tally file error: ' + res.error + (res.hint ? '\n\n' + res.hint : ''));
     render();
   }));
   wrap.appendChild(grid);
@@ -331,19 +469,20 @@ function renderUpload(c) {
   const grid2 = el('<div class="grid2"></div>');
   grid2.appendChild(dropZone('2B carry forward', 'cf2b', true, async (file) => {
     const b64 = await fileToBase64(file); const a = await api();
-    const res = await a.load_cf_2b(b64);
+    const res = await a.load_cf_2b(b64, file.name);
     if (res.ok) state.files.cf2b = { name: file.name, size: file.size };
     else alert('CF 2B error: ' + res.error);
     render();
   }));
   grid2.appendChild(dropZone('Tally carry forward', 'cftally', true, async (file) => {
     const b64 = await fileToBase64(file); const a = await api();
-    const res = await a.load_cf_tally(b64);
+    const res = await a.load_cf_tally(b64, file.name);
     if (res.ok) state.files.cftally = { name: file.name, size: file.size };
     else alert('CF Tally error: ' + res.error);
     render();
   }));
   wrap.appendChild(grid2);
+  maybeShowCfReminder();
 
   const exWrap = el('<div style="max-width:430px;margin-top:16px"></div>');
   exWrap.appendChild(dropZone('GST exclusion list', 'excl', true, async (file) => {
@@ -360,8 +499,19 @@ function renderUpload(c) {
   const rowEnd = el('<div class="row-end"></div>');
   const monthBox = el('<div><label class="field-label">Month (YYYY-Mon)</label></div>');
   const monthInput = el(`<input class="text-input" style="width:160px" value="${esc(state.month)}" />`);
-  monthInput.oninput = (e) => setMonth(e.target.value);
+  monthInput.oninput = (e) => { state.monthEdited = true; state.monthAuto = false; setMonth(e.target.value); };
   monthBox.appendChild(monthInput);
+  if (state.monthAuto) {
+    monthBox.appendChild(el('<div class="muted" style="margin-top:5px">Auto-detected from your files</div>'));
+  }
+  if (state.monthMismatch) {
+    monthBox.appendChild(el(`<div class="muted" style="margin-top:5px;color:var(--amber-text)">2B period (${esc(state.monthMismatch.twoB)}) and Tally invoice dates (${esc(state.monthMismatch.tally)}) don't agree — double check before running.</div>`));
+  }
+  if (state.monthEdited && (state.detected.raw2b || state.detected.rawtally)) {
+    const resetBtn = el('<button class="btn-secondary" style="margin-top:6px;padding:4px 10px;font-size:11px">Use detected month</button>');
+    resetBtn.onclick = () => { state.monthEdited = false; autoApplyMonth(); render(); };
+    monthBox.appendChild(resetBtn);
+  }
   rowEnd.appendChild(monthBox);
 
   const runBtn = el(`<button class="btn-primary" ${ready && state.run.status !== 'running' ? '' : 'disabled'}>${state.run.status === 'running' ? 'Processing…' : 'Run reconciliation'}</button>`);
@@ -503,6 +653,7 @@ document.getElementById('monthFoot').addEventListener('input', (e) => setMonth(e
   render();
   const a = await api();
   try { state.outputDir = await a.get_output_dir(); } catch (e) { /* ignore */ }
+  try { state.reminders = await a.get_reminders(); } catch (e) { /* ignore */ }
   render();
 })();
 </script>

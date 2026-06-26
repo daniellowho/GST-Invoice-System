@@ -39,7 +39,7 @@ anywhere — Desktop, a USB stick, another PC — and it runs on its own.
 
 1. **Double-click `GSTR2BRecon.exe`.** A window opens.
 2. **Upload files** — drag your `2B Raw` and `Tally Raw` `.xlsx` files into the
-   two drop zones, set the month (e.g. `2026-Jan`), and click *Proceed*.
+two drop zones, set the month (e.g. `2026-Jan`), and click *Proceed*.
 3. **Run processing** — work down the three steps:
    - *Stage 1* cleans both raw files.
    - *Stage 2* optionally merges previous-month Carry Forward files (drop them
