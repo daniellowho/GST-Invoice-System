@@ -36,7 +36,7 @@ ACCOUNTING_FMT = '_ * #,##0.00_ ;_ * \\-#,##0.00_ ;_ * "-"??_ ;_ @_ '
 DATE_FMT_TALLY = "d-mmm-yy"
 DATE_FMT_2B    = "DD/MM/YYYY"
 
-AMT_TOL         = 1.0
+AMT_TOL         = 2.0
 FUZZY_THRESHOLD = 90
 _EXCEL_EPOCH    = date(1899, 12, 30)
 
@@ -625,7 +625,21 @@ def _inv_match(b_inv, t_inv, exact_only=False):
     return fuzz.token_sort_ratio(bn, tn) >= FUZZY_THRESHOLD
 
 
+def _tax_type(row):
+    igst = _num(row.get("Integrated Tax(₹)", 0))
+    cgst_sgst = (_num(row.get("Central Tax(₹)", 0))
+                 + _num(row.get("State/UT Tax(₹)", 0)))
+    if igst > 0:
+        return "igst"
+    if cgst_sgst > 0:
+        return "cgst_sgst"
+    return "zero"
+
+
 def _amounts_match(b, t):
+    bt, tt = _tax_type(b), _tax_type(t)
+    if bt != "zero" and tt != "zero" and bt != tt:
+        return False
     b_cgst_sgst, b_igst = _tax_amounts(b)
     t_cgst_sgst, t_igst = _tax_amounts(t)
     return _within(t_cgst_sgst, b_cgst_sgst) and _within(t_igst, b_igst)
@@ -682,6 +696,7 @@ def reconcile(df_2b, df_tally, excl_set):
     do_pass(False)
 
     remarks2b, remarkst = {}, {}
+    diffs2b, diffst = {}, {}
     for bi, b in df_2b.iterrows():
         if bi in e2 or bi in matched2b:
             continue
@@ -698,6 +713,7 @@ def reconcile(df_2b, df_tally, excl_set):
                 best = t
         if best is not None:
             remarks2b[bi] = _remark(b, best, "Tally")
+            diffs2b[bi] = _num(b.get("Invoice Value(₹)", 0)) - _num(best.get("Invoice Value(₹)", 0))
 
     b2b_by_g = {}
     for idx, row in df_2b.iterrows():
@@ -720,6 +736,7 @@ def reconcile(df_2b, df_tally, excl_set):
                 best = b
         if best is not None:
             remarkst[ti] = _remark(best, t, "2B")
+            diffst[ti] = _num(best.get("Invoice Value(₹)", 0)) - _num(t.get("Invoice Value(₹)", 0))
 
     clean_2b = [c for c in df_2b.columns if not c.startswith("_")]
     clean_t = [c for c in df_tally.columns if not c.startswith("_")]
@@ -744,10 +761,12 @@ def reconcile(df_2b, df_tally, excl_set):
     um2 = [i for i in df_2b.index if i not in e2 and i not in matched2b]
     df_cf2b = df_2b.loc[um2, clean_2b].copy().reset_index(drop=True)
     df_cf2b["Remark"] = [remarks2b.get(i, "") for i in um2]
+    df_cf2b["2B − Tally (₹)"] = [diffs2b.get(i, None) for i in um2]
 
     umt = [i for i in df_tally.index if i not in et and i not in matchedt]
     df_cft = df_tally.loc[umt, clean_t].copy().reset_index(drop=True)
     df_cft["Remark"] = [remarkst.get(i, "") for i in umt]
+    df_cft["2B − Tally (₹)"] = [diffst.get(i, None) for i in umt]
 
     stats = {
         "total2B": len(df_2b), "totalTally": len(df_tally),
@@ -786,11 +805,17 @@ def build_summary_bytes(df_recon, df_ntbc):
 
 
 def build_2b_cf_bytes(df):
-    return _wb_bytes(lambda ws: _write_2b_sheet(ws, df, extra=[("Remark", "left", "@")]))
+    return _wb_bytes(lambda ws: _write_2b_sheet(ws, df, extra=[
+        ("Remark", "left", "@"),
+        ("2B − Tally (₹)", "right", ACCOUNTING_FMT),
+    ]))
 
 
 def build_tally_cf_bytes(df):
-    return _wb_bytes(lambda ws: _write_tally_sheet(ws, df, extra=[("Remark", "left", "@")], grand_total=True))
+    return _wb_bytes(lambda ws: _write_tally_sheet(ws, df, extra=[
+        ("Remark", "left", "@"),
+        ("2B − Tally (₹)", "right", ACCOUNTING_FMT),
+    ], grand_total=True))
 
 
 def build_2b_latest_bytes(df):
